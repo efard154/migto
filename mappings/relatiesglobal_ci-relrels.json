@@ -1,0 +1,52 @@
+{
+  "name": "relaties.global_ci-rel.rels",
+  "description": "Perbandingan Tabel LAMA: relaties, global_ci  →  Tabel BARU: relaties, relaties_s",
+  "blocks": [
+    {
+      "source_table": "relaties",
+      "target_table": "relaties",
+      "id_source": "id",
+      "id_target": "rel_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "relatietype": "rel_type",
+        "registratienummer": "rel_registration_nr",
+        "deb_nummer": "rel_deb_nr"
+      }
+    },
+    {
+      "source_table": "relaties",
+      "target_table": "relaties_s",
+      "id_source": "id",
+      "id_target": "rel_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "rdx": "rel_rdx",
+        "rdy": "rel_rdy",
+        "po_email": "rel_po_email",
+        "cert_audit_date": "rel_cert_audit_date",
+        "cert_end_date": "rel_cert_end_date",
+        "mcpd_only": "rel_mcpd_only"
+      }
+    },
+    {
+      "source_table": "global_ci",
+      "target_table": "relaties",
+      "id_source": "id",
+      "id_target": "rel_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "firmanaam": "rel_name"
+      }
+    }
+  ]
+}

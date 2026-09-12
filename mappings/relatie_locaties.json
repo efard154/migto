@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "columns": {
+        "datum": "datum",
+        "locaties_id": "loc_id",
+        "user": "user"
+      },
+      "dedup_key": null,
+      "fk": null,
+      "id_mode": "preserve",
+      "id_source": "id",
+      "id_target": "rel_id",
+      "source_table": "relaties_locaties",
+      "target_table": "relaties_locaties_new",
+      "upsert": true
+    }
+  ],
+  "description": "",
+  "name": "relatie_locaties"
+}

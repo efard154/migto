@@ -1,0 +1,27 @@
+{
+  "name": "facturen",
+  "description": "",
+  "blocks": [
+    {
+      "source_table": "facturen",
+      "target_table": "facturen",
+      "id_source": "id",
+      "id_target": "fac_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "Nummer": "fac_nummer",
+        "Datum": "fac_datum",
+        "credits_per_blok": "fac_credits_per_blok",
+        "aantal_blok": "fac_aantal_blok",
+        "prijs_per_blok": "fac_prijs_per_blok",
+        "credits_amount": "fac_credits_amount",
+        "amount": "fac_amount",
+        "Status": "fac_status",
+        "user": "user"
+      }
+    }
+  ]
+}

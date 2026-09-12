@@ -1,0 +1,86 @@
+{
+  "name": "locaties",
+  "description": "Gabungan OLD_DB.locaties + OLD_DB.sub_locatie -> NEW_DB.locaties & NEW_DB.locaties_rest",
+  "blocks": [
+    {
+      "source_table": "locaties",
+      "target_table": "locaties",
+      "id_source": "id",
+      "id_target": "loc_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "fk": null,
+      "dedup_key": null,
+      "columns": {
+        "locatie_reg_date": "loc_registration_date",
+        "vestigingsadres_postcode": "loc_address_postcode",
+        "vestigingsadres_huisnummer": "loc_address_nr",
+        "vestigingsadres_hnr_toevoeging": "loc_address_nr_addon",
+        "vestigingsadres": "loc_address",
+        "vestigingsadres_plaats": "loc_address_city",
+        "gps_latitude": "loc_gps_latitude",
+        "gps_longitude": "loc_gps_longitude",
+        "gebouwtype": "loc_building_type",
+        "user": "loc_user",
+        "last_update": "last_update",
+        "status": "loc_status",
+        "ontwikkelgebied": "loc_devl_area"
+      }
+    },
+    {
+      "source_table": "locaties",
+      "target_table": "locaties_rest",
+      "id_source": "id",
+      "id_target": "loc_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "fk": null,
+      "dedup_key": null,
+      "columns": {
+        "firmanaam": "firmanaam",
+        "bag_id": "bag_id",
+        "sbi_code_1": "sbi_code_1",
+        "sbi_code_2": "sbi_code_2",
+        "sbi_code_3": "sbi_code_3",
+        "info_sbi_code_1": "info_sbi_code_1",
+        "info_sbi_code_2": "info_sbi_code_2",
+        "info_sbi_code_3": "info_sbi_code_3",
+        "kvk_nummer": "kvk_nummer",
+        "vestigingsnummer": "vestigingsnummer",
+        "gebouwfunctie": "gebouwfunctie",
+        "meerdere_installaties": "meerdere_installaties",
+        "oadereaanduidingontwikkelgebied": "oadereaanduidingontwikkelgebied"
+      }
+    },
+    {
+      "source_table": "sub_locatie",
+      "target_table": "locaties",
+      "id_source": "id",
+      "id_target": "sub_loc_id_old",
+      "id_mode": "preserve_secondary",
+      "upsert": false,
+      "dedup_key": "sub_loc_id_old",
+      "fk": {
+        "source_column": "locaties_id",
+        "target_column": "sub_loc_id",
+        "ref_source_table": "locaties",
+        "ref_source_column": "id"
+      },
+      "columns": {
+        "volgnummer": "loc_ordernr",
+        "stookruimte": "loc_stookruimte",
+        "user": "loc_user",
+        "last_update": "last_update",
+        "sectienummer": "loc_section_nr",
+        "perceelnummer": "loc_parcel_nr",
+        "postcode": "loc_address_postcode",
+        "huisnummer": "loc_address_nr",
+        "huisnummer_toevoeging": "loc_address_nr_addon",
+        "straatnaam": "loc_address",
+        "plaats": "loc_address_city",
+        "gps_breedtegraad": "loc_gps_latitude",
+        "gps_lengtegraad": "loc_gps_longitude"
+      }
+    }
+  ]
+}
