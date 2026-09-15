@@ -112,15 +112,18 @@
                 <span class="step-no">2</span>
                 <div class="step-body">
                   <h3>Kolom Kunci (ID)</h3>
-                  <div class="field-grid">
-                    <label>ID Sumber <select id="block-id-source"></select></label>
-                    <label>ID Tujuan <select id="block-id-target"></select></label>
+                  <label class="checkbox inline-check"><input type="checkbox" id="block-no-key"> Tabel sumber ini tidak punya kolom kunci/ID (insert langsung, tanpa preserve id)</label>
+                  <div id="key-fields">
+                    <div class="field-grid">
+                      <label>ID Sumber <select id="block-id-source"></select></label>
+                      <label>ID Tujuan <select id="block-id-target"></select></label>
+                    </div>
+                    <div class="segmented" id="block-id-mode-group">
+                      <button type="button" class="seg-btn active" data-value="preserve">preserve — id lama langsung jadi PK baru</button>
+                      <button type="button" class="seg-btn" data-value="preserve_secondary">preserve_secondary — PK baru auto, id lama disimpan terpisah</button>
+                    </div>
+                    <label class="checkbox inline-check"><input type="checkbox" id="block-upsert" checked> Upsert (ON DUPLICATE KEY UPDATE — aman dijalankan ulang)</label>
                   </div>
-                  <div class="segmented" id="block-id-mode-group">
-                    <button type="button" class="seg-btn active" data-value="preserve">preserve — id lama langsung jadi PK baru</button>
-                    <button type="button" class="seg-btn" data-value="preserve_secondary">preserve_secondary — PK baru auto, id lama disimpan terpisah</button>
-                  </div>
-                  <label class="checkbox inline-check"><input type="checkbox" id="block-upsert" checked> Upsert (ON DUPLICATE KEY UPDATE — aman dijalankan ulang)</label>
                 </div>
               </div>
 
@@ -143,8 +146,80 @@
               <div class="step">
                 <span class="step-no">4</span>
                 <div class="step-body">
+                  <h3>Column → Row (Unpivot) <span class="step-optional">(opsional — pecah banyak kolom sumber jadi banyak baris tujuan)</span></h3>
+                  <label class="checkbox inline-check"><input type="checkbox" id="block-unpivot-enable"> Blok ini butuh transformasi column-to-row</label>
+                  <div class="fk-box" id="unpivot-fields" hidden>
+                    <p class="hint">Pilih kolom tujuan penampung LABEL (nama periode/kategori) dan VALUE (nilainya), lalu tambahkan kolom-kolom sumber yang mau dipecah jadi baris.</p>
+                    <div class="field-grid">
+                      <label>Kolom Tujuan (Label) <select id="unpivot-label-col"></select></label>
+                      <label>Kolom Tujuan (Value) <select id="unpivot-value-col"></select></label>
+                    </div>
+                    <div class="field-grid">
+                      <label>Kolom Sumber <select id="unpivot-item-source"></select></label>
+                      <label>Label untuk kolom ini <input id="unpivot-item-label" placeholder="mis. Januari"></label>
+                    </div>
+                    <div class="btn-row">
+                      <button type="button" id="btn-add-unpivot-item">+ Tambah Item</button>
+                    </div>
+                    <table class="data-table" id="unpivot-items-table">
+                      <thead><tr><th>Kolom Sumber</th><th>Label</th><th></th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                    <label class="checkbox inline-check"><input type="checkbox" id="unpivot-skip-null" checked> Lewati kolom sumber yang nilainya NULL (tidak insert baris kosong)</label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="step">
+                <span class="step-no">5</span>
+                <div class="step-body">
+                  <h3>Filter / Kondisi <span class="step-optional">(opsional — hanya migrasi baris sumber yang cocok kondisi)</span></h3>
+                  <label class="checkbox inline-check"><input type="checkbox" id="block-filter-enable"> Blok ini perlu filter/kondisi (WHERE) pada tabel sumber</label>
+                  <div class="fk-box" id="filter-fields" hidden>
+                    <p class="hint">Contoh: hanya migrasi baris dengan <code>status = 'aktif'</code>. Tambahkan kondisi satu per satu, lalu pilih cara menggabungkannya kalau lebih dari satu.</p>
+                    <div class="field-grid">
+                      <label>Gabungkan kondisi dengan</label>
+                    </div>
+                    <div class="segmented" id="filter-logic-group">
+                      <button type="button" class="seg-btn active" data-value="AND">AND — semua kondisi harus cocok</button>
+                      <button type="button" class="seg-btn" data-value="OR">OR — salah satu kondisi cocok</button>
+                    </div>
+                    <div class="field-grid">
+                      <label>Kolom <select id="filter-cond-column"></select></label>
+                      <label>Operator
+                        <select id="filter-cond-operator">
+                          <option value="=">=</option>
+                          <option value="!=">!=</option>
+                          <option value=">">&gt;</option>
+                          <option value=">=">&gt;=</option>
+                          <option value="<">&lt;</option>
+                          <option value="<=">&lt;=</option>
+                          <option value="LIKE">LIKE</option>
+                          <option value="NOT LIKE">NOT LIKE</option>
+                          <option value="IN">IN</option>
+                          <option value="NOT IN">NOT IN</option>
+                          <option value="IS NULL">IS NULL</option>
+                          <option value="IS NOT NULL">IS NOT NULL</option>
+                        </select>
+                      </label>
+                      <label id="filter-cond-value-wrap">Nilai <input id="filter-cond-value" placeholder="mis. aktif (IN/NOT IN: pisahkan koma)"></label>
+                    </div>
+                    <div class="btn-row">
+                      <button type="button" id="btn-add-filter-condition">+ Tambah Kondisi</button>
+                    </div>
+                    <table class="data-table" id="filter-conditions-table">
+                      <thead><tr><th>Kolom</th><th>Operator</th><th>Nilai</th><th></th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="step">
+                <span class="step-no">6</span>
+                <div class="step-body">
                   <h3>Pemetaan Kolom</h3>
-                  <p class="hint">Seret kolom sumber (kiri) ke slot kolom tujuan (kanan). Klik ✕ pada slot untuk melepas pasangan.</p>
+                  <p class="hint">Seret kolom sumber (kiri) ke slot kolom tujuan (kanan). Klik ✕ pada slot untuk melepas pasangan. Satu kolom sumber boleh diseret ke lebih dari satu slot tujuan sekaligus — kolom yang sudah dipetakan ditandai hijau dan menampilkan daftar kolom tujuannya.</p>
                   <div class="dnd-area">
                     <div class="dnd-col">
                       <h4>Kolom Sumber</h4>
@@ -167,7 +242,7 @@
             <div class="panel panel-tight">
               <h2>Blok di Mapping Ini</h2>
               <table id="blocks-table" class="data-table">
-                <thead><tr><th>#</th><th>Sumber</th><th>Tujuan</th><th>ID Mode</th><th>Kolom</th><th>FK</th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Sumber</th><th>Tujuan</th><th>ID Mode</th><th>Kolom</th><th>FK</th><th>Filter</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
@@ -184,21 +259,37 @@
                 </div>
               </div>
               <div id="run-table-list" class="obj-list obj-list-selectable"></div>
+              <label class="checkbox inline-check" title="SET FOREIGN_KEY_CHECKS = 0 selama insert berlangsung, lalu dikembalikan ke 1 setelahnya. Berguna kalau urutan migrasi antar tabel tidak bisa mengikuti urutan FK, atau ada FK yatim yang tetap ingin dipaksa masuk.">
+                <input type="checkbox" id="run-force"> Force migration (SET FOREIGN_KEY_CHECKS = 0 — abaikan urutan/constraint FK saat insert)
+              </label>
+              <label class="checkbox inline-check" title="Kalau aktif: satu blok/tabel yang gagal tidak menghentikan sisanya, migrasi tetap lanjut ke blok/tabel berikutnya. Kalau dimatikan: migrasi berhenti total begitu ada yang gagal, sisa tabel yang belum diproses ditandai 'dilewati'.">
+                <input type="checkbox" id="run-continue-on-error" checked> Lanjutkan proses lain meski ada yang gagal (jangan hentikan seluruh migrasi di kegagalan pertama)
+              </label>
+              <label class="checkbox inline-check danger-check" title="DELETE FROM setiap tabel tujuan yang terlibat, dijalankan tepat sebelum insert data baru. Data lama yang sudah ada di tabel tujuan akan hilang permanen — pakai kalau mau reseed dari kosong.">
+                <input type="checkbox" id="run-clear-existing"> ⚠ Hapus data lama di tabel tujuan sebelum migrasi (DELETE FROM tabel tujuan — permanen)
+              </label>
               <div class="btn-row">
                 <button id="btn-run" class="primary">▶ Jalankan Migrasi</button>
               </div>
             </div>
 
             <div class="panel panel-tight">
-              <h2>Log Real-time</h2>
+              <div class="panel-head-row">
+                <h2>Log Real-time</h2>
+                <label class="checkbox inline-check log-detail-toggle" title="Baris progres per-batch (mis. '...2000 baris diproses') disembunyikan secara default supaya log tetap ringkas. Centang untuk menampilkannya kembali.">
+                  <input type="checkbox" id="log-show-detail"> Tampilkan detail
+                  <span id="log-detail-hint" class="log-detail-hint"></span>
+                </label>
+              </div>
               <div id="run-status" class="status-badge idle">Belum dijalankan</div>
+              <div id="run-summary" class="run-summary" hidden></div>
               <pre id="log-panel" class="log-panel"></pre>
             </div>
 
             <div class="panel panel-tight">
               <h2>Riwayat Run</h2>
               <table id="jobs-table" class="data-table">
-                <thead><tr><th>Job ID</th><th>Tabel</th><th>Status</th><th>Mulai</th><th>Selesai</th><th></th></tr></thead>
+                <thead><tr><th>Job ID</th><th>Tabel</th><th>Force</th><th>Hapus Lama</th><th>Status</th><th>Hasil</th><th>Mulai</th><th>Selesai</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

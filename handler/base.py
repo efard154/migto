@@ -3,6 +3,32 @@ from db import connect_migration
 
 
 class BaseMigrator(ABC):
+    def _disable_fk_checks(self, conn):
+        """Matikan FOREIGN_KEY_CHECKS di session koneksi ini (mode force migration),
+        supaya insert tidak digagalkan urutan tabel/FK yatim."""
+        cur = conn.cursor()
+        cur.execute("SET FOREIGN_KEY_CHECKS = 0")
+        cur.close()
+
+    def _restore_fk_checks(self, conn):
+        try:
+            cur = conn.cursor()
+            cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+            cur.close()
+        except Exception:
+            pass  # koneksi mungkin sudah bermasalah/tertutup, aman diabaikan
+
+    def _clear_target_table(self, conn, table):
+        """Hapus semua baris di tabel tujuan sebelum insert (opsi 'hapus data
+        sebelumnya' pada force migration, buat reseed bersih). Pakai DELETE FROM,
+        bukan TRUNCATE, supaya tetap ikut transaksi & FOREIGN_KEY_CHECKS session
+        yang sedang aktif alih-alih implicit-commit ala DDL."""
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM `{table}`")
+        deleted = cur.rowcount
+        cur.close()
+        return deleted
+
     def update_log(self, table_name: str, status: str, error_msg: str = None):
         """Memperbarui status transaksi migrasi ke MIGRATION_DB."""
         try:

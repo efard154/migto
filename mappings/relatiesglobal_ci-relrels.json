@@ -1,21 +1,39 @@
 {
-  "name": "relaties.global_ci-rel.rels",
-  "description": "Perbandingan Tabel LAMA: relaties, global_ci  →  Tabel BARU: relaties, relaties_s",
   "blocks": [
     {
-      "source_table": "relaties",
-      "target_table": "relaties",
+      "columns": {
+        "contact_aanhef": "rel_contact_salutation",
+        "contact_achternaam": "rel_contact_lastname",
+        "contact_email": "rel_contact_email",
+        "contact_geslacht": "rel_contact_gender",
+        "contact_telefoon": "rel_contact_phone",
+        "contact_tussenvoegsel": "rel_contact_infix",
+        "contact_voornaam": "rel_contact_firstname",
+        "emailadres": "rel_email",
+        "faxnummer": "rel_fax",
+        "land": "rel_country",
+        "postsadres": "rel_post_address",
+        "postsadres_hnr_toevoeging": "rel_post_address_nr_addon",
+        "postsadres_huisnummer": "rel_post_address_nr",
+        "postsadres_plaats": "rel_post_address_city",
+        "postsadres_postcode": "rel_post_address_postcode",
+        "prefix": "rel_prefix",
+        "relatie_regdate": "rel_registration_date",
+        "telefoonnummer": "rel_phone",
+        "vestigingsadres": "rel_address",
+        "vestigingsadres_plaats": "rel_address_city",
+        "website": "rel_website"
+      },
+      "dedup_key": null,
+      "filter": null,
+      "fk": null,
+      "id_mode": "preserve",
       "id_source": "id",
       "id_target": "rel_id",
-      "id_mode": "preserve",
-      "upsert": true,
-      "dedup_key": null,
-      "fk": null,
-      "columns": {
-        "relatietype": "rel_type",
-        "registratienummer": "rel_registration_nr",
-        "deb_nummer": "rel_deb_nr"
-      }
+      "source_table": "relaties",
+      "target_table": "relaties",
+      "unpivot": null,
+      "upsert": false
     },
     {
       "source_table": "relaties",
@@ -27,26 +45,42 @@
       "dedup_key": null,
       "fk": null,
       "columns": {
+        "saldo_minimum_alert": "rel_saldo_minimum_alert",
+        "actual_saldo": "rel_actual_saldo",
+        "purchased_credits": "rel_purchased_credits",
+        "used_credits": "rel_used_credits",
+        "automatischsaldoopwaarderen": "rel_automatischsaldoopwaarderen",
+        "aantalblokken": "rel_aantalblokken",
+        "logo": "rel_logo",
+        "ci": "rel_ci",
+        "certificaat_regnr_CI": "rel_certificaat_regnr_CI",
+        "user": "rel_user",
+        "status_registration": "rel_status_registration",
+        "generate_code_auto": "rel_generate_code_auto",
+        "bedrijfslogo_certificaat": "rel_bedrijfslogo_certificaat",
+        "bedrijfstext_certificaat": "rel_bedrijfstext_certificaat",
+        "bedrijfslogo_etiket": "rel_bedrijfslogo_etiket",
+        "credit_bestelreferentie": "rel_credit_bestelreferentie",
+        "factuur_adres": "rel_factuur_adres",
+        "factuur_email": "rel_factuur_email",
+        "publish_website": "rel_publish_website",
+        "latitude": "rel_latitude",
+        "longitude": "rel_longitude",
         "rdx": "rel_rdx",
         "rdy": "rel_rdy",
         "po_email": "rel_po_email",
         "cert_audit_date": "rel_cert_audit_date",
         "cert_end_date": "rel_cert_end_date",
-        "mcpd_only": "rel_mcpd_only"
-      }
-    },
-    {
-      "source_table": "global_ci",
-      "target_table": "relaties",
-      "id_source": "id",
-      "id_target": "rel_id",
-      "id_mode": "preserve",
-      "upsert": true,
-      "dedup_key": null,
-      "fk": null,
-      "columns": {
-        "firmanaam": "rel_name"
-      }
+        "mcpd_only": "rel_mcpd_only",
+        "opgeschort": "rel_opgeschort",
+        "max_id_generatie": "rel_max_id_generatie",
+        "email_facture_created": "rel_email_facture_created",
+        "last_update": "last_update"
+      },
+      "unpivot": null,
+      "filter": null
     }
-  ]
+  ],
+  "description": "",
+  "name": "relaties.global_ci-rel.rels"
 }

@@ -30,7 +30,7 @@ def _get_columns(conn_factory, table):
     cur.execute(
         """
         SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable,
-               COLUMN_KEY AS `key`, COLUMN_DEFAULT AS `default`
+               COLUMN_KEY AS `key`, COLUMN_DEFAULT AS `default`, EXTRA AS extra
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
         ORDER BY ORDINAL_POSITION

@@ -3,11 +3,14 @@ const state = {
   currentMapping: null,
   editingBlockIndex: null,
   pairs: {}, // { newCol: oldCol }
+  unpivotItems: [], // [{ source_column, label }]
+  filterConditions: [], // [{ column, operator, value }]
   oldColumns: [],
   newColumns: [],
   selectedRunTables: new Set(),
   currentJobId: null,
   eventSource: null,
+  logEntries: [], // seluruh baris log run yang sedang ditampilkan (termasuk yang detail/disembunyikan)
 };
 
 // ---------------------------------------------------------------------------
@@ -353,6 +356,7 @@ async function onSourceTableChange() {
   state.oldColumns = await api(`/api/columns/old/${encodeURIComponent(table)}`);
   fillSelect("block-id-source", state.oldColumns.map((c) => c.name));
   fillSelect("fk-source-column", state.oldColumns.map((c) => c.name));
+  fillSelect("filter-cond-column", state.oldColumns.map((c) => c.name));
   renderDnd();
 }
 
@@ -371,12 +375,26 @@ async function onTargetTableChange() {
 
 document.getElementById("block-source-table").addEventListener("change", async () => {
   state.pairs = {};
+  state.unpivotItems = [];
+  state.filterConditions = [];
+  document.getElementById("block-unpivot-enable").checked = false;
+  document.getElementById("unpivot-fields").hidden = true;
+  document.getElementById("block-filter-enable").checked = false;
+  document.getElementById("filter-fields").hidden = true;
+  renderUnpivotItems();
+  renderFilterConditions();
   await onSourceTableChange();
+  refreshUnpivotColumnSelects();
   updateAddBlockState();
 });
 document.getElementById("block-target-table").addEventListener("change", async () => {
   state.pairs = {};
+  state.unpivotItems = [];
+  document.getElementById("block-unpivot-enable").checked = false;
+  document.getElementById("unpivot-fields").hidden = true;
+  renderUnpivotItems();
   await onTargetTableChange();
+  refreshUnpivotColumnSelects();
   updateAddBlockState();
 });
 
@@ -396,9 +414,10 @@ document.getElementById("block-fk-enable").addEventListener("change", (e) => {
   updateAddBlockState();
 });
 
-// ----- Segmented control: mode ID (preserve / preserve_secondary) -----
+// ----- Segmented control: mode ID (preserve / preserve_secondary / none) -----
 
 function getIdMode() {
+  if (document.getElementById("block-no-key").checked) return "none";
   return document.querySelector("#block-id-mode-group .seg-btn.active")?.dataset.value || "preserve";
 }
 
@@ -423,11 +442,195 @@ document.querySelectorAll("#block-id-mode-group .seg-btn").forEach((btn) => {
   });
 });
 
+document.getElementById("block-no-key").addEventListener("change", (e) => {
+  document.getElementById("key-fields").hidden = e.target.checked;
+  renderDnd();
+  refreshUnpivotColumnSelects();
+  updateAddBlockState();
+});
+
 ["block-id-source", "block-id-target", "fk-source-column", "fk-target-column"].forEach((id) => {
   document.getElementById(id).addEventListener("change", () => {
     renderDnd();
+    refreshUnpivotColumnSelects();
     updateAddBlockState();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Unpivot (column -> row)
+// ---------------------------------------------------------------------------
+
+function refreshUnpivotColumnSelects() {
+  const idMode = getIdMode();
+  const idTarget = idMode === "none" ? null : document.getElementById("block-id-target").value;
+  const fkEnabled = document.getElementById("block-fk-enable").checked;
+  const fkTargetCol = fkEnabled ? document.getElementById("fk-target-column").value : null;
+  const usedTargets = new Set([idTarget, fkTargetCol].filter(Boolean));
+  const targetNames = state.newColumns.map((c) => c.name).filter((n) => !usedTargets.has(n));
+
+  const prevLabel = document.getElementById("unpivot-label-col").value;
+  const prevValue = document.getElementById("unpivot-value-col").value;
+  fillSelect("unpivot-label-col", targetNames);
+  fillSelect("unpivot-value-col", targetNames);
+  if (targetNames.includes(prevLabel)) document.getElementById("unpivot-label-col").value = prevLabel;
+  if (targetNames.includes(prevValue)) document.getElementById("unpivot-value-col").value = prevValue;
+
+  const idSource = idMode === "none" ? null : document.getElementById("block-id-source").value;
+  const fkSourceCol = fkEnabled ? document.getElementById("fk-source-column").value : null;
+  const usedSources = new Set(
+    [idSource, fkSourceCol, ...state.unpivotItems.map((it) => it.source_column)].filter(Boolean)
+  );
+  const sourceNames = state.oldColumns.map((c) => c.name).filter((n) => !usedSources.has(n));
+  fillSelect("unpivot-item-source", sourceNames);
+}
+
+function renderUnpivotItems() {
+  const tbody = document.querySelector("#unpivot-items-table tbody");
+  tbody.innerHTML = "";
+  state.unpivotItems.forEach((it, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${it.source_column}</td><td>${it.label}</td><td><button type="button" data-i="${i}" class="btn-remove-unpivot-item danger">✕</button></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll(".btn-remove-unpivot-item").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.unpivotItems.splice(+btn.dataset.i, 1);
+      renderUnpivotItems();
+      refreshUnpivotColumnSelects();
+      renderDnd();
+      updateAddBlockState();
+    })
+  );
+}
+
+document.getElementById("block-unpivot-enable").addEventListener("change", (e) => {
+  document.getElementById("unpivot-fields").hidden = !e.target.checked;
+  if (!e.target.checked) state.unpivotItems = [];
+  renderUnpivotItems();
+  refreshUnpivotColumnSelects();
+  renderDnd();
+  updateAddBlockState();
+});
+
+["unpivot-label-col", "unpivot-value-col"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", () => {
+    refreshUnpivotColumnSelects();
+    renderDnd();
+    updateAddBlockState();
+  });
+});
+
+document.getElementById("btn-add-unpivot-item").addEventListener("click", () => {
+  const col = document.getElementById("unpivot-item-source").value;
+  const label = document.getElementById("unpivot-item-label").value.trim();
+  if (!col || !label) {
+    toast("Pilih kolom sumber & isi label dulu", "error");
+    return;
+  }
+  state.unpivotItems.push({ source_column: col, label });
+  document.getElementById("unpivot-item-label").value = "";
+  renderUnpivotItems();
+  refreshUnpivotColumnSelects();
+  renderDnd();
+  updateAddBlockState();
+});
+
+// ---------------------------------------------------------------------------
+// Filter / kondisi (WHERE) per blok
+// ---------------------------------------------------------------------------
+
+const FILTER_OPS_NO_VALUE = new Set(["IS NULL", "IS NOT NULL"]);
+const FILTER_OPS_LIST_VALUE = new Set(["IN", "NOT IN"]);
+
+function getFilterLogic() {
+  return document.querySelector("#filter-logic-group .seg-btn.active")?.dataset.value || "AND";
+}
+
+function setFilterLogic(value) {
+  document.querySelectorAll("#filter-logic-group .seg-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.value === value);
+  });
+}
+
+document.querySelectorAll("#filter-logic-group .seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setFilterLogic(btn.dataset.value));
+});
+
+document.getElementById("block-filter-enable").addEventListener("change", (e) => {
+  document.getElementById("filter-fields").hidden = !e.target.checked;
+  if (!e.target.checked) state.filterConditions = [];
+  renderFilterConditions();
+  updateAddBlockState();
+});
+
+function updateFilterValuePlaceholder() {
+  const op = document.getElementById("filter-cond-operator").value;
+  const valueInput = document.getElementById("filter-cond-value");
+  const noValue = FILTER_OPS_NO_VALUE.has(op);
+  valueInput.disabled = noValue;
+  valueInput.value = noValue ? "" : valueInput.value;
+  valueInput.placeholder = noValue
+    ? "(tidak perlu nilai)"
+    : FILTER_OPS_LIST_VALUE.has(op)
+      ? "pisahkan beberapa nilai dengan koma"
+      : "mis. aktif";
+}
+
+document.getElementById("filter-cond-operator").addEventListener("change", updateFilterValuePlaceholder);
+
+function renderFilterConditions() {
+  const tbody = document.querySelector("#filter-conditions-table tbody");
+  tbody.innerHTML = "";
+  state.filterConditions.forEach((cond, i) => {
+    const valueDisplay = FILTER_OPS_NO_VALUE.has(cond.operator)
+      ? "-"
+      : Array.isArray(cond.value)
+        ? cond.value.join(", ")
+        : cond.value;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${cond.column}</td>
+      <td>${cond.operator}</td>
+      <td>${valueDisplay}</td>
+      <td><button type="button" data-i="${i}" class="btn-remove-filter-condition danger">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll(".btn-remove-filter-condition").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.filterConditions.splice(+btn.dataset.i, 1);
+      renderFilterConditions();
+      updateAddBlockState();
+    })
+  );
+}
+
+document.getElementById("btn-add-filter-condition").addEventListener("click", () => {
+  const column = document.getElementById("filter-cond-column").value;
+  const operator = document.getElementById("filter-cond-operator").value;
+  const rawValue = document.getElementById("filter-cond-value").value.trim();
+
+  if (!column) {
+    toast("Pilih kolom untuk kondisi filter dulu", "error");
+    return;
+  }
+
+  let value = null;
+  if (!FILTER_OPS_NO_VALUE.has(operator)) {
+    if (!rawValue) {
+      toast("Isi nilai untuk kondisi ini, atau pilih operator IS NULL / IS NOT NULL", "error");
+      return;
+    }
+    value = FILTER_OPS_LIST_VALUE.has(operator)
+      ? rawValue.split(",").map((v) => v.trim()).filter(Boolean)
+      : rawValue;
+  }
+
+  state.filterConditions.push({ column, operator, value });
+  document.getElementById("filter-cond-value").value = "";
+  renderFilterConditions();
+  updateAddBlockState();
 });
 
 // ---------------------------------------------------------------------------
@@ -435,34 +638,54 @@ document.querySelectorAll("#block-id-mode-group .seg-btn").forEach((btn) => {
 // ---------------------------------------------------------------------------
 
 function renderDnd() {
-  const idSource = document.getElementById("block-id-source").value;
+  const idMode = getIdMode();
+  const idSource = idMode === "none" ? null : document.getElementById("block-id-source").value;
   const fkEnabled = document.getElementById("block-fk-enable").checked;
   const fkSourceCol = fkEnabled ? document.getElementById("fk-source-column").value : null;
+  const unpivotEnabled = document.getElementById("block-unpivot-enable").checked;
+  const unpivotSourceCols = new Set(unpivotEnabled ? state.unpivotItems.map((it) => it.source_column) : []);
 
   const sourceEl = document.getElementById("source-columns");
   sourceEl.innerHTML = "";
   state.oldColumns
-    .filter((c) => c.name !== idSource && c.name !== fkSourceCol)
+    .filter((c) => c.name !== idSource && c.name !== fkSourceCol && !unpivotSourceCols.has(c.name))
     .forEach((c) => {
-      const used = Object.values(state.pairs).includes(c.name);
+      const mappedTargets = Object.entries(state.pairs)
+        .filter(([, oldCol]) => oldCol === c.name)
+        .map(([newCol]) => newCol);
+      const used = mappedTargets.length > 0;
       const chip = document.createElement("div");
       chip.className = "chip" + (used ? " used" : "");
       chip.draggable = true;
-      chip.title = c.type;
-      chip.innerHTML = `<span class="chip-name">${c.name}</span><span class="chip-type">${c.type}</span>`;
+      chip.title = used ? `${c.type} — dipetakan ke: ${mappedTargets.join(", ")}` : c.type;
+      chip.innerHTML = `
+        <div class="chip-row">
+          <span class="chip-name">${c.name}</span>
+          <span class="chip-type">${c.type}</span>
+        </div>
+        ${used ? `<div class="chip-mapped-to">→ ${mappedTargets.join(", ")}${mappedTargets.length > 1 ? ` (${mappedTargets.length}x)` : ""}</div>` : ""}
+      `;
       chip.addEventListener("dragstart", (ev) => {
         ev.dataTransfer.setData("text/plain", c.name);
       });
       sourceEl.appendChild(chip);
     });
 
-  const idTarget = document.getElementById("block-id-target").value;
+  const idTarget = idMode === "none" ? null : document.getElementById("block-id-target").value;
   const fkTargetCol = fkEnabled ? document.getElementById("fk-target-column").value : null;
+  const unpivotLabelCol = unpivotEnabled ? document.getElementById("unpivot-label-col").value : null;
+  const unpivotValueCol = unpivotEnabled ? document.getElementById("unpivot-value-col").value : null;
 
   const targetEl = document.getElementById("target-columns");
   targetEl.innerHTML = "";
   state.newColumns
-    .filter((c) => c.name !== idTarget && c.name !== fkTargetCol)
+    .filter(
+      (c) =>
+        c.name !== idTarget &&
+        c.name !== fkTargetCol &&
+        c.name !== unpivotLabelCol &&
+        c.name !== unpivotValueCol
+    )
     .forEach((c) => {
       const paired = state.pairs[c.name];
       const slot = document.createElement("div");
@@ -484,9 +707,9 @@ function renderDnd() {
         const oldCol = ev.dataTransfer.getData("text/plain");
         if (!oldCol) return;
 
-        for (const [newCol, mappedOld] of Object.entries(state.pairs)) {
-          if (mappedOld === oldCol) delete state.pairs[newCol];
-        }
+        // Satu kolom sumber boleh dipetakan ke beberapa kolom tujuan sekaligus,
+        // jadi mapping source lain yang sudah ada TIDAK dilepas di sini -- hanya
+        // slot tujuan ini yang diisi/ditimpa.
         state.pairs[c.name] = oldCol;
         renderDnd();
         updateAddBlockState();
@@ -511,12 +734,16 @@ function renderDnd() {
 function validateBlockForm() {
   const sourceTable = document.getElementById("block-source-table").value;
   const targetTable = document.getElementById("block-target-table").value;
+  const idMode = getIdMode();
   const idSource = document.getElementById("block-id-source").value;
   const idTarget = document.getElementById("block-id-target").value;
   const fkEnabled = document.getElementById("block-fk-enable").checked;
+  const unpivotEnabled = document.getElementById("block-unpivot-enable").checked;
 
   if (!sourceTable || !targetTable) return "Pilih tabel sumber & tujuan dulu";
-  if (!idSource || !idTarget) return "Pilih kolom ID sumber & tujuan";
+  if (idMode !== "none" && (!idSource || !idTarget)) {
+    return "Pilih kolom ID sumber & tujuan, atau centang 'tidak punya kolom kunci'";
+  }
   if (fkEnabled) {
     const fkOk =
       document.getElementById("fk-source-column").value &&
@@ -525,7 +752,19 @@ function validateBlockForm() {
       document.getElementById("fk-ref-column").value;
     if (!fkOk) return "Lengkapi field foreign key, atau matikan opsinya";
   }
-  if (Object.keys(state.pairs).length === 0) return "Pasangkan minimal 1 kolom lewat drag & drop";
+  if (unpivotEnabled) {
+    const labelCol = document.getElementById("unpivot-label-col").value;
+    const valueCol = document.getElementById("unpivot-value-col").value;
+    if (!labelCol || !valueCol) return "Pilih kolom tujuan untuk label & value unpivot";
+    if (labelCol === valueCol) return "Kolom label & value unpivot tidak boleh sama";
+    if (state.unpivotItems.length === 0) return "Tambahkan minimal 1 item unpivot (kolom sumber + label)";
+  }
+  if (document.getElementById("block-filter-enable").checked && state.filterConditions.length === 0) {
+    return "Tambahkan minimal 1 kondisi filter, atau matikan opsinya";
+  }
+  if (Object.keys(state.pairs).length === 0 && !unpivotEnabled) {
+    return "Pasangkan minimal 1 kolom lewat drag & drop, atau aktifkan unpivot";
+  }
   return null;
 }
 
@@ -544,14 +783,26 @@ document.getElementById("btn-add-block").addEventListener("click", () => {
 
   const sourceTable = document.getElementById("block-source-table").value;
   const targetTable = document.getElementById("block-target-table").value;
-  const idSource = document.getElementById("block-id-source").value;
-  const idTarget = document.getElementById("block-id-target").value;
   const idMode = getIdMode();
+  const idSource = idMode === "none" ? null : document.getElementById("block-id-source").value;
+  const idTarget = idMode === "none" ? null : document.getElementById("block-id-target").value;
   const upsert = document.getElementById("block-upsert").checked;
   const fkEnabled = document.getElementById("block-fk-enable").checked;
+  const unpivotEnabled = document.getElementById("block-unpivot-enable").checked;
+  const filterEnabled = document.getElementById("block-filter-enable").checked;
 
+  // Satu kolom sumber (oldCol) bisa punya beberapa kolom tujuan (newCol) --
+  // simpan sebagai string kalau cuma 1, atau list kalau lebih dari 1.
   const columns = {};
-  for (const [newCol, oldCol] of Object.entries(state.pairs)) columns[oldCol] = newCol;
+  for (const [newCol, oldCol] of Object.entries(state.pairs)) {
+    if (columns[oldCol] === undefined) {
+      columns[oldCol] = newCol;
+    } else if (Array.isArray(columns[oldCol])) {
+      columns[oldCol].push(newCol);
+    } else {
+      columns[oldCol] = [columns[oldCol], newCol];
+    }
+  }
 
   const block = {
     source_table: sourceTable,
@@ -570,6 +821,20 @@ document.getElementById("btn-add-block").addEventListener("click", () => {
         }
       : null,
     columns,
+    unpivot: unpivotEnabled
+      ? {
+          target_label_column: document.getElementById("unpivot-label-col").value,
+          target_value_column: document.getElementById("unpivot-value-col").value,
+          items: state.unpivotItems.slice(),
+          skip_null: document.getElementById("unpivot-skip-null").checked,
+        }
+      : null,
+    filter: filterEnabled
+      ? {
+          logic: getFilterLogic(),
+          conditions: state.filterConditions.slice(),
+        }
+      : null,
   };
 
   if (state.editingBlockIndex !== null) {
@@ -583,6 +848,10 @@ document.getElementById("btn-add-block").addEventListener("click", () => {
   toast('Blok ditambahkan. Klik "Simpan Mapping" untuk menuliskannya ke file.', "success");
 });
 
+function countTargetColumns(columns) {
+  return Object.values(columns || {}).reduce((n, v) => n + (Array.isArray(v) ? v.length : 1), 0);
+}
+
 function renderBlocksTable() {
   const tbody = document.querySelector("#blocks-table tbody");
   tbody.innerHTML = "";
@@ -593,8 +862,9 @@ function renderBlocksTable() {
       <td>${b.source_table}</td>
       <td>${b.target_table}</td>
       <td>${b.id_mode}</td>
-      <td>${Object.keys(b.columns).length} kolom</td>
+      <td>${countTargetColumns(b.columns)} kolom${b.unpivot ? ` + unpivot (${b.unpivot.items.length})` : ""}</td>
       <td>${b.fk ? `${b.fk.source_column} → ${b.fk.target_column}` : "-"}</td>
+      <td>${b.filter ? `${b.filter.conditions.length} kondisi (${b.filter.logic})` : "-"}</td>
       <td>
         <button data-i="${i}" class="btn-edit-block">Edit</button>
         <button data-i="${i}" class="btn-remove-block danger">Hapus</button>
@@ -625,11 +895,16 @@ async function editBlock(i) {
   document.getElementById("block-target-table").value = b.target_table;
   await onTargetTableChange();
 
-  document.getElementById("block-id-source").value = b.id_source;
-  document.getElementById("block-id-target").value = b.id_target;
-  setIdMode(b.id_mode);
-  document.getElementById("block-upsert").checked = !!b.upsert;
-  document.getElementById("block-upsert").disabled = b.id_mode === "preserve_secondary";
+  const noKey = b.id_mode === "none";
+  document.getElementById("block-no-key").checked = noKey;
+  document.getElementById("key-fields").hidden = noKey;
+  if (!noKey) {
+    document.getElementById("block-id-source").value = b.id_source;
+    document.getElementById("block-id-target").value = b.id_target;
+    setIdMode(b.id_mode);
+    document.getElementById("block-upsert").checked = !!b.upsert;
+    document.getElementById("block-upsert").disabled = b.id_mode === "preserve_secondary";
+  }
 
   document.getElementById("block-fk-enable").checked = !!b.fk;
   document.getElementById("fk-fields").hidden = !b.fk;
@@ -642,8 +917,30 @@ async function editBlock(i) {
     document.getElementById("fk-ref-column").value = b.fk.ref_source_column;
   }
 
+  document.getElementById("block-unpivot-enable").checked = !!b.unpivot;
+  document.getElementById("unpivot-fields").hidden = !b.unpivot;
+  state.unpivotItems = b.unpivot ? b.unpivot.items.slice() : [];
+  refreshUnpivotColumnSelects();
+  if (b.unpivot) {
+    document.getElementById("unpivot-label-col").value = b.unpivot.target_label_column;
+    document.getElementById("unpivot-value-col").value = b.unpivot.target_value_column;
+    document.getElementById("unpivot-skip-null").checked = b.unpivot.skip_null !== false;
+  }
+  renderUnpivotItems();
+
+  document.getElementById("block-filter-enable").checked = !!b.filter;
+  document.getElementById("filter-fields").hidden = !b.filter;
+  state.filterConditions = b.filter ? b.filter.conditions.slice() : [];
+  setFilterLogic(b.filter ? b.filter.logic : "AND");
+  renderFilterConditions();
+
   state.pairs = {};
-  for (const [oldCol, newCol] of Object.entries(b.columns)) state.pairs[newCol] = oldCol;
+  for (const [oldCol, newCol] of Object.entries(b.columns || {})) {
+    const targets = Array.isArray(newCol) ? newCol : [newCol];
+    targets.forEach((t) => {
+      state.pairs[t] = oldCol;
+    });
+  }
   renderDnd();
   updateAddBlockState();
 
@@ -687,9 +984,21 @@ document.getElementById("mapping-select").addEventListener("change", async (e) =
 function startNewMapping() {
   state.currentMapping = { name: "", description: "", blocks: [] };
   state.editingBlockIndex = null;
+  state.pairs = {};
+  state.unpivotItems = [];
+  state.filterConditions = [];
   document.getElementById("mapping-name").value = "";
   document.getElementById("mapping-desc").value = "";
   document.getElementById("mapping-name").disabled = false;
+  document.getElementById("block-no-key").checked = false;
+  document.getElementById("key-fields").hidden = false;
+  document.getElementById("block-unpivot-enable").checked = false;
+  document.getElementById("unpivot-fields").hidden = true;
+  document.getElementById("block-filter-enable").checked = false;
+  document.getElementById("filter-fields").hidden = true;
+  setFilterLogic("AND");
+  renderUnpivotItems();
+  renderFilterConditions();
   renderBlocksTable();
   updateAddBlockState();
 }
@@ -785,18 +1094,34 @@ document.getElementById("btn-run").addEventListener("click", async () => {
     toast("Pilih minimal satu tabel", "error");
     return;
   }
-  if (!confirm(`Yakin jalankan migrasi untuk ${tables.length} tabel?\n${tables.join(", ")}\n\nIni akan menulis data ke NEW_DB.`)) {
+  const force = document.getElementById("run-force").checked;
+  const continueOnError = document.getElementById("run-continue-on-error").checked;
+  const clearExisting = document.getElementById("run-clear-existing").checked;
+  const forceNote = force
+    ? "\n\n⚠ Force migration aktif: FOREIGN_KEY_CHECKS akan dimatikan sementara selama insert."
+    : "";
+  const stopNote = continueOnError
+    ? ""
+    : "\n\n⏹ Mode lanjutkan-jika-gagal nonaktif: migrasi akan berhenti total begitu ada tabel yang gagal.";
+  const clearNote = clearExisting
+    ? "\n\n⚠⚠ HAPUS DATA LAMA AKTIF: semua baris yang sudah ada di tabel tujuan akan DIHAPUS PERMANEN sebelum data baru dimasukkan."
+    : "";
+  if (!confirm(`Yakin jalankan migrasi untuk ${tables.length} tabel?\n${tables.join(", ")}\n\nIni akan menulis data ke NEW_DB.${forceNote}${stopNote}${clearNote}`)) {
+    return;
+  }
+  if (clearExisting && !confirm("⚠ KONFIRMASI ULANG: data lama di tabel tujuan akan dihapus PERMANEN dan tidak bisa dikembalikan. Lanjutkan?")) {
     return;
   }
 
-  document.getElementById("log-panel").textContent = "";
+  clearLogPanel();
+  renderRunSummary(null);
   setRunStatus("RUNNING");
 
   try {
     const { job_id } = await api("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tables }),
+      body: JSON.stringify({ tables, force, continue_on_error: continueOnError, clear_existing: clearExisting }),
     });
     state.currentJobId = job_id;
     streamJob(job_id);
@@ -811,7 +1136,8 @@ function setRunStatus(status) {
   el.className = "status-badge " + status.toLowerCase();
   const labels = {
     RUNNING: "⏳ Sedang berjalan...",
-    SUCCESS: "✔ Selesai",
+    SUCCESS: "✔ Selesai — semua tabel berhasil",
+    PARTIAL: "⚠ Selesai sebagian — ada tabel yang gagal",
     FAILED: "✘ Gagal",
     idle: "Belum dijalankan",
   };
@@ -819,14 +1145,82 @@ function setRunStatus(status) {
   setStatus(undefined, `Job ${state.currentJobId || ""}: ${status}`);
 }
 
+function renderRunSummary(summary) {
+  const el = document.getElementById("run-summary");
+  if (!summary) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const skippedCount = summary.skipped_count || 0;
+  const rowsSkipped = summary.rows_skipped || 0;
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="run-summary-row">
+      <span class="rs-ok">✔ ${summary.success_count} tabel berhasil</span>
+      <span class="rs-fail">✘ ${summary.failed_count} tabel gagal</span>
+      ${skippedCount ? `<span class="rs-skip">⏭ ${skippedCount} tabel dilewati</span>` : ""}
+      <span>dari total ${summary.total} tabel</span>
+    </div>
+    <div class="run-summary-row">
+      <span class="rs-ok">✔ ${formatCount(summary.rows_migrated)} baris berhasil dimigrasi</span>
+      <span class="rs-fail">✘ ${formatCount(summary.rows_failed)} baris gagal</span>
+      ${rowsSkipped ? `<span class="rs-skip">⏭ ${formatCount(rowsSkipped)} baris duplikat dilewati</span>` : ""}
+    </div>
+    ${summary.failed_count ? `<div class="rs-failed-list">Tabel gagal: ${summary.failed.join(", ")}</div>` : ""}
+    ${skippedCount ? `<div class="rs-failed-list">Tabel dilewati: ${summary.skipped.join(", ")}</div>` : ""}
+  `;
+}
+
+function clearLogPanel() {
+  state.logEntries = [];
+  document.getElementById("log-panel").innerHTML = "";
+  updateLogDetailHint();
+}
+
 function appendLog(entry) {
+  state.logEntries.push(entry);
+  const showDetail = document.getElementById("log-show-detail").checked;
+  if (entry.detail && !showDetail) {
+    updateLogDetailHint();
+    return;
+  }
   const panel = document.getElementById("log-panel");
   const line = document.createElement("div");
   line.className = "log-line log-" + entry.level;
   line.textContent = entry.text;
   panel.appendChild(line);
   panel.scrollTop = panel.scrollHeight;
+  updateLogDetailHint();
 }
+
+function rerenderLogPanel() {
+  const panel = document.getElementById("log-panel");
+  const showDetail = document.getElementById("log-show-detail").checked;
+  panel.innerHTML = "";
+  state.logEntries.forEach((entry) => {
+    if (entry.detail && !showDetail) return;
+    const line = document.createElement("div");
+    line.className = "log-line log-" + entry.level;
+    line.textContent = entry.text;
+    panel.appendChild(line);
+  });
+  panel.scrollTop = panel.scrollHeight;
+  updateLogDetailHint();
+}
+
+function updateLogDetailHint() {
+  const hint = document.getElementById("log-detail-hint");
+  const detailCount = state.logEntries.filter((e) => e.detail).length;
+  const showDetail = document.getElementById("log-show-detail").checked;
+  hint.textContent = detailCount
+    ? showDetail
+      ? `(${detailCount} baris)`
+      : `(${detailCount} baris disembunyikan)`
+    : "";
+}
+
+document.getElementById("log-show-detail").addEventListener("change", rerenderLogPanel);
 
 function streamJob(jobId) {
   if (state.eventSource) state.eventSource.close();
@@ -837,6 +1231,7 @@ function streamJob(jobId) {
   es.addEventListener("done", (ev) => {
     const data = JSON.parse(ev.data);
     setRunStatus(data.status);
+    renderRunSummary(data.summary);
     es.close();
     refreshJobsList();
   });
@@ -849,10 +1244,17 @@ async function refreshJobsList() {
   tbody.innerHTML = "";
   jobs.forEach((j) => {
     const tr = document.createElement("tr");
+    const hasil = j.summary
+      ? `✔ ${j.summary.success_count} / ✘ ${j.summary.failed_count}` +
+        (j.summary.skipped_count ? ` / ⏭ ${j.summary.skipped_count}` : "")
+      : "-";
     tr.innerHTML = `
       <td>${j.id}</td>
       <td>${j.tables.join(", ")}</td>
+      <td>${j.force ? "✔" : "-"}</td>
+      <td>${j.clear_existing ? '<span class="text-danger">⚠ ✔</span>' : "-"}</td>
       <td><span class="status-badge ${j.status.toLowerCase()}">${j.status}</span></td>
+      <td>${hasil}</td>
       <td>${formatTime(j.started_at)}</td>
       <td>${j.finished_at ? formatTime(j.finished_at) : "-"}</td>
       <td><button data-id="${j.id}" class="btn-view-job">Lihat Log</button></td>
@@ -866,10 +1268,12 @@ async function refreshJobsList() {
 
 async function viewJobLogs(jobId) {
   const logs = await api(`/api/run/${jobId}/logs`);
-  document.getElementById("log-panel").textContent = "";
+  clearLogPanel();
   logs.forEach(appendLog);
   const status = await api(`/api/run/${jobId}`);
+  state.currentJobId = jobId;
   setRunStatus(status.status);
+  renderRunSummary(status.summary);
 }
 
 // ---------------------------------------------------------------------------

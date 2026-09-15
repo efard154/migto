@@ -37,12 +37,12 @@ def list_tables(conn):
 
 
 def get_columns(conn, table):
-    """Kembalikan list dict {name, type, nullable, key, default} untuk satu tabel."""
+    """Kembalikan list dict {name, type, nullable, key, default, extra} untuk satu tabel."""
     cur = conn.cursor(dictionary=True)
     cur.execute(
         """
         SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable,
-               COLUMN_KEY AS `key`, COLUMN_DEFAULT AS `default`
+               COLUMN_KEY AS `key`, COLUMN_DEFAULT AS `default`, EXTRA AS extra
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
         ORDER BY ORDINAL_POSITION
@@ -52,6 +52,14 @@ def get_columns(conn, table):
     cols = cur.fetchall()
     cur.close()
     return cols
+
+
+def column_requires_value(c):
+    """True kalau kolom ini NOT NULL, tidak punya default, dan bukan auto_increment --
+    artinya WAJIB diisi eksplisit saat insert, atau migrasi akan gagal kalau
+    kolom ini tidak dipetakan/diisi."""
+    extra = (c.get("extra") or "").lower()
+    return c["nullable"] == "NO" and c.get("default") is None and "auto_increment" not in extra
 
 
 def get_primary_key(conn, table):
@@ -103,11 +111,25 @@ def choose_column(columns, title, allow_none=False):
     listing.add_column("Tipe", style="yellow")
     listing.add_column("Null?", justify="center")
     listing.add_column("Key", justify="center")
+    listing.add_column("Default", justify="center")
 
     if allow_none:
-        listing.add_row("0", "(skip / tidak dipetakan)", "", "", "")
+        listing.add_row("0", "(skip / tidak dipetakan)", "", "", "", "")
     for idx, c in enumerate(columns, 1):
-        listing.add_row(str(idx), c["name"], c["type"], c["nullable"], c["key"])
+        if column_requires_value(c):
+            # NOT NULL + tidak ada default + bukan auto_increment -> wajib dipetakan,
+            # kalau tidak insert bakal gagal. Ditandai merah biar kelihatan jelas.
+            listing.add_row(
+                f"[bold red]{idx}[/bold red]",
+                f"[bold red]{c['name']}[/bold red]",
+                f"[bold red]{c['type']}[/bold red]",
+                f"[bold red]{c['nullable']}[/bold red]",
+                f"[bold red]{c['key']}[/bold red]",
+                "[bold red]⚠ wajib diisi[/bold red]",
+            )
+        else:
+            default_display = c["default"] if c["default"] is not None else "[dim]-[/dim]"
+            listing.add_row(str(idx), c["name"], c["type"], c["nullable"], c["key"], str(default_display))
 
     console.print(listing)
 
@@ -128,6 +150,57 @@ def choose_column(columns, title, allow_none=False):
 
 
 # ---------------------------------------------------------------------------
+# Filter / kondisi (WHERE) per blok
+# ---------------------------------------------------------------------------
+
+FILTER_OPS_NO_VALUE = ["IS NULL", "IS NOT NULL"]
+FILTER_OPS_LIST_VALUE = ["IN", "NOT IN"]
+FILTER_OPERATORS = ["=", "!=", ">", ">=", "<", "<="] + ["LIKE", "NOT LIKE"] + FILTER_OPS_LIST_VALUE + FILTER_OPS_NO_VALUE
+
+
+def build_filter(old_cols):
+    """Wizard interaktif buat susun kondisi WHERE yang melekat pada satu blok --
+    hanya baris sumber yang cocok kondisi ini yang dimigrasi."""
+    if not Confirm.ask(
+        "\nApakah blok ini perlu filter/kondisi untuk menyaring baris sumber (WHERE)? "
+        "Contoh: hanya migrasi baris dengan status='aktif'.",
+        default=False,
+    ):
+        return None
+
+    conditions = []
+    while True:
+        col = choose_column(old_cols, "Kolom untuk kondisi filter")
+        op = choose_from_list(FILTER_OPERATORS, f"Operator untuk `{col}`")
+
+        if op in FILTER_OPS_NO_VALUE:
+            value = None
+        elif op in FILTER_OPS_LIST_VALUE:
+            raw = Prompt.ask(f"Daftar nilai untuk `{col}` {op} (pisahkan dengan koma)")
+            value = [v.strip() for v in raw.split(",") if v.strip()]
+            if not value:
+                console.print("[red]Minimal harus ada 1 nilai, kondisi ini dilewati.[/red]")
+                continue
+        else:
+            value = Prompt.ask(f"Nilai untuk `{col}` {op}")
+
+        conditions.append({"column": col, "operator": op, "value": value})
+        value_display = "" if value is None else (", ".join(value) if isinstance(value, list) else value)
+        console.print(f"[dim]  -> kondisi ditambahkan: `{col}` {op} {value_display}[/dim]")
+
+        if not Confirm.ask("Tambah kondisi filter lain?", default=False):
+            break
+
+    logic = "AND"
+    if len(conditions) > 1:
+        logic = Prompt.ask(
+            "Gabungkan semua kondisi filter di atas dengan", choices=["AND", "OR"], default="AND"
+        )
+
+    return {"logic": logic, "conditions": conditions}
+
+
+# ---------------------------------------------------------------------------
 # Wizard pembuatan 1 blok mapping
 # ---------------------------------------------------------------------------
 
@@ -140,36 +213,50 @@ def build_block(conn_old, conn_new, old_tables, new_tables):
     old_cols = get_columns(conn_old, source_table)
     new_cols = get_columns(conn_new, target_table)
 
-    default_id_source = get_primary_key(conn_old, source_table) or old_cols[0]["name"]
-    console.print(f"[dim]Primary key sumber terdeteksi: {default_id_source}[/dim]")
-    id_source = choose_column(old_cols, f"Kolom ID di `{source_table}` (sumber)")
-
-    default_id_target = get_primary_key(conn_new, target_table)
-    console.print(f"[dim]Primary key tujuan terdeteksi: {default_id_target}[/dim]")
-
-    console.print(
-        "\n[bold yellow]Mode ID:[/bold yellow]\n"
-        " 1. preserve            -> nilai id lama langsung jadi primary key baru\n"
-        " 2. preserve_secondary  -> id baru auto-increment, id lama disimpan di kolom lain\n"
+    has_key = Confirm.ask(
+        "\nApakah tabel sumber ini punya kolom kunci/ID yang mau dipertahankan atau dijadikan referensi? "
+        "(jawab tidak kalau tabelnya tidak punya kolom kunci sama sekali, misal tabel lookup/pivot)",
+        default=True,
     )
-    id_mode_choice = Prompt.ask("Pilih mode", choices=["1", "2"], default="1")
-    id_mode = "preserve" if id_mode_choice == "1" else "preserve_secondary"
 
-    if id_mode == "preserve":
-        id_target = choose_column(new_cols, f"Kolom ID di `{target_table}` (tujuan, primary key)")
-        dedup_key = None
-        upsert = Confirm.ask(
-            "Pakai ON DUPLICATE KEY UPDATE supaya aman dijalankan ulang (upsert)?", default=True
+    id_source = id_target = dedup_key = None
+    upsert = False
+
+    if not has_key:
+        id_mode = "none"
+        console.print(
+            "[dim]Tidak ada kolom kunci -> baris akan di-insert langsung ke tujuan tanpa mempertahankan id "
+            "apa pun. Idempotensi (aman dijalankan ulang) tidak berlaku untuk blok ini.[/dim]"
         )
     else:
-        console.print("[dim]Kolom ini akan menyimpan id lama sebagai referensi (bukan primary key baru).[/dim]")
-        id_target = choose_column(new_cols, f"Kolom penyimpan id lama di `{target_table}`")
-        dedup_key = id_target
-        upsert = False
+        default_id_source = get_primary_key(conn_old, source_table) or old_cols[0]["name"]
+        console.print(f"[dim]Primary key sumber terdeteksi: {default_id_source}[/dim]")
+        id_source = choose_column(old_cols, f"Kolom ID di `{source_table}` (sumber)")
+
+        default_id_target = get_primary_key(conn_new, target_table)
+        console.print(f"[dim]Primary key tujuan terdeteksi: {default_id_target}[/dim]")
+
         console.print(
-            f"[dim]Idempoten: baris dengan `{dedup_key}` yang sudah ada di `{target_table}` akan dilewati "
-            f"kalau mapping ini dijalankan ulang.[/dim]"
+            "\n[bold yellow]Mode ID:[/bold yellow]\n"
+            " 1. preserve            -> nilai id lama langsung jadi primary key baru\n"
+            " 2. preserve_secondary  -> id baru auto-increment, id lama disimpan di kolom lain\n"
         )
+        id_mode_choice = Prompt.ask("Pilih mode", choices=["1", "2"], default="1")
+        id_mode = "preserve" if id_mode_choice == "1" else "preserve_secondary"
+
+        if id_mode == "preserve":
+            id_target = choose_column(new_cols, f"Kolom ID di `{target_table}` (tujuan, primary key)")
+            upsert = Confirm.ask(
+                "Pakai ON DUPLICATE KEY UPDATE supaya aman dijalankan ulang (upsert)?", default=True
+            )
+        else:
+            console.print("[dim]Kolom ini akan menyimpan id lama sebagai referensi (bukan primary key baru).[/dim]")
+            id_target = choose_column(new_cols, f"Kolom penyimpan id lama di `{target_table}`")
+            dedup_key = id_target
+            console.print(
+                f"[dim]Idempoten: baris dengan `{dedup_key}` yang sudah ada di `{target_table}` akan dilewati "
+                f"kalau mapping ini dijalankan ulang.[/dim]"
+            )
 
     fk = None
     if Confirm.ask(
@@ -195,24 +282,100 @@ def build_block(conn_old, conn_new, old_tables, new_tables):
             "ref_source_table": ref_table,
             "ref_source_column": ref_col,
         }
+        if id_mode == "preserve":
+            console.print(
+                "[yellow]  ⚠ Mode ID 'preserve' tidak menyimpan kolom FK terpisah (PK baru = id lama). "
+                "FK di atas hanya efektif untuk mode 'preserve_secondary' atau tabel tanpa kolom kunci.[/yellow]"
+            )
 
     used_old = {id_source} | ({fk["source_column"]} if fk else set())
     used_new = {id_target} | ({fk["target_column"]} if fk else set())
 
-    console.print("\n[bold yellow]Pemetaan kolom satu per satu.[/bold yellow] Pilih 0 untuk skip (tidak dipetakan).\n")
+    unpivot = None
+    if Confirm.ask(
+        "\nApakah blok ini perlu transformasi column-to-row (unpivot)? Contoh: banyak kolom sumber "
+        "(jan, feb, mar, ...) mau dipecah jadi banyak baris di tujuan (mis. kolom periode + nilai).",
+        default=False,
+    ):
+        console.print("[dim]Pilih kolom tujuan yang menampung LABEL (nama periode/kategori) dan VALUE (nilainya).[/dim]")
+        label_col = choose_column(
+            [c for c in new_cols if c["name"] not in used_new],
+            f"Kolom tujuan untuk LABEL di `{target_table}`",
+        )
+        used_new.add(label_col)
+        value_col = choose_column(
+            [c for c in new_cols if c["name"] not in used_new],
+            f"Kolom tujuan untuk VALUE di `{target_table}`",
+        )
+        used_new.add(value_col)
 
-    mappable_new_cols = [c for c in new_cols if c["name"] not in used_new]
+        skip_null = Confirm.ask("Lewati kolom sumber yang nilainya NULL (tidak insert baris kosong)?", default=True)
+
+        items = []
+        console.print("\n[bold yellow]Tambahkan kolom sumber satu per satu untuk di-unpivot.[/bold yellow] Pilih 0 kalau sudah selesai.\n")
+        while True:
+            remaining = [c for c in old_cols if c["name"] not in used_old]
+            if not remaining:
+                break
+            col = choose_column(remaining, "Kolom sumber berikutnya untuk di-unpivot", allow_none=True)
+            if not col:
+                break
+            label = Prompt.ask(f"Label untuk `{col}` (nilai yang diisi ke kolom LABEL di atas)", default=col)
+            items.append({"source_column": col, "label": label})
+            used_old.add(col)
+
+        if not items:
+            console.print("[yellow]Tidak ada kolom yang ditambahkan, unpivot dibatalkan.[/yellow]")
+        else:
+            unpivot = {
+                "target_label_column": label_col,
+                "target_value_column": value_col,
+                "items": items,
+                "skip_null": skip_null,
+            }
+
+    filter_def = build_filter(old_cols)
+
+    console.print(
+        "\n[bold yellow]Pemetaan kolom satu per satu.[/bold yellow] Pilih 0 untuk skip (tidak dipetakan). "
+        "Satu kolom sumber juga bisa dipetakan ke lebih dari satu kolom tujuan sekaligus "
+        "(nilainya diduplikasi ke semua kolom tujuan itu).\n"
+    )
+
     columns = {}
     for c in old_cols:
         if c["name"] in used_old:
             continue
 
+        mappable_new_cols = [nc for nc in new_cols if nc["name"] not in used_new]
+        if not mappable_new_cols:
+            console.print(f"[dim]  -> `{c['name']}` dilewati (tidak ada kolom tujuan tersisa)[/dim]")
+            continue
+
         console.print(f"[bold cyan]Kolom sumber:[/bold cyan] {c['name']} ({c['type']})")
         target_col = choose_column(mappable_new_cols, f"Petakan `{c['name']}` ke kolom tujuan mana?", allow_none=True)
-        if target_col:
-            columns[c["name"]] = target_col
-        else:
+        if not target_col:
             console.print(f"[dim]  -> `{c['name']}` dilewati (tidak dipetakan)[/dim]")
+            continue
+
+        targets = [target_col]
+        used_new.add(target_col)
+
+        while True:
+            mappable_new_cols = [nc for nc in new_cols if nc["name"] not in used_new]
+            if not mappable_new_cols:
+                break
+            if not Confirm.ask(
+                f"Petakan `{c['name']}` juga ke kolom tujuan lain (nilai yang sama diduplikasi)?", default=False
+            ):
+                break
+            extra = choose_column(mappable_new_cols, f"Kolom tujuan tambahan untuk `{c['name']}`", allow_none=True)
+            if not extra:
+                break
+            targets.append(extra)
+            used_new.add(extra)
+
+        columns[c["name"]] = targets[0] if len(targets) == 1 else targets
 
     return {
         "source_table": source_table,
@@ -224,6 +387,8 @@ def build_block(conn_old, conn_new, old_tables, new_tables):
         "dedup_key": dedup_key,
         "fk": fk,
         "columns": columns,
+        "unpivot": unpivot,
+        "filter": filter_def,
     }
 
 

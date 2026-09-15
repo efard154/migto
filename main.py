@@ -138,9 +138,70 @@ def main():
         console.print("\n[yellow]Proses migrasi dibatalkan oleh pengguna.[/yellow]\n")
         sys.exit(0)
 
+    force = Confirm.ask(
+        "[bold yellow]Aktifkan force migration (SET FOREIGN_KEY_CHECKS = 0 selama insert, "
+        "abaikan urutan/constraint FK)?[/bold yellow]",
+        default=False,
+    )
+
+    continue_on_error = Confirm.ask(
+        "[bold yellow]Lanjutkan ke tabel/blok berikutnya walau ada yang gagal "
+        "(jangan hentikan seluruh migrasi di kegagalan pertama)?[/bold yellow]",
+        default=True,
+    )
+
+    clear_existing = Confirm.ask(
+        "[bold red]Hapus data lama di tabel tujuan sebelum migrasi (DELETE FROM tabel tujuan)? "
+        "Ini akan MENGHAPUS PERMANEN data yang sudah ada di tabel tujuan sebelum insert.[/bold red]",
+        default=False,
+    )
+    if clear_existing:
+        console.print(
+            "\n[bold red]⚠ PERINGATAN: opsi hapus data lama AKTIF. Semua baris yang sudah ada di setiap "
+            "tabel tujuan yang terlibat akan dihapus permanen sebelum data baru dimasukkan.[/bold red]"
+        )
+        if not Confirm.ask("[bold red]Apakah Anda benar-benar yakin ingin melanjutkan?[/bold red]", default=False):
+            clear_existing = False
+            console.print("[yellow]Opsi hapus data lama dibatalkan, migrasi lanjut tanpa menghapus data lama.[/yellow]")
+
     # 6. Catat antrean & Jalankan Proses Migrasi Modular
     register_migration_queue(selected_tables)
-    run_migration_process(selected_tables)
+    summary = run_migration_process(
+        selected_tables, force=force, continue_on_error=continue_on_error, clear_existing=clear_existing
+    )
+
+    # 7. Tampilkan Ringkasan Hasil Seeding
+    result_table = Table(title="Ringkasan Hasil Migrasi", box=ROUNDED, header_style="bold blue", title_style="bold cyan")
+    result_table.add_column("No", justify="center", width=4)
+    result_table.add_column("Tabel")
+    result_table.add_column("Status", justify="center")
+
+    row_no = 1
+    for tbl in summary["success"]:
+        result_table.add_row(str(row_no), tbl, "[green]✔ Berhasil[/green]")
+        row_no += 1
+    for tbl in summary["failed"]:
+        result_table.add_row(str(row_no), tbl, "[bold red]✘ Gagal[/bold red]")
+        row_no += 1
+    for tbl in summary.get("skipped", []):
+        result_table.add_row(str(row_no), tbl, "[yellow]⏭ Dilewati[/yellow]")
+        row_no += 1
+
+    console.print("\n", result_table)
+
+    skipped_count = summary.get("skipped_count", 0)
+    skipped_note = f", {skipped_count} dilewati" if skipped_count else ""
+    console.print(
+        f"\n[bold]{summary['success_count']} berhasil, {summary['failed_count']} gagal{skipped_note}[/bold] "
+        f"dari total {summary['total']} tabel."
+    )
+
+    rows_skipped = summary.get("rows_skipped", 0)
+    rows_skipped_note = f", {rows_skipped} baris duplikat dilewati" if rows_skipped else ""
+    console.print(
+        f"[bold]{summary.get('rows_migrated', 0)} baris berhasil dimigrasi, "
+        f"{summary.get('rows_failed', 0)} baris gagal{rows_skipped_note}[/bold]."
+    )
 
     console.print("\n[bold dim green]✔ Seluruh alur migrasi selesai dieksekusi.[/bold dim green]\n")
 

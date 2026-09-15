@@ -28,6 +28,17 @@ app = Flask(__name__)
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 
+
+@app.after_request
+def _no_cache_static(response):
+    """Matikan cache browser buat aset statis (index.html/app.js/style.css).
+    Tanpa ini, browser bisa terus pakai app.js versi lama walau file di server
+    sudah diperbarui -- fitur baru "kelihatan tidak jalan" padahal cuma stale
+    cache, bukan bug di kode."""
+    if request.path == "/" or request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 RICH_TAG_RE = re.compile(r"\[/?[a-zA-Z0-9 _]+\]")
 LEVEL_MARKERS = [
     ("bold red", "error"),
@@ -39,7 +50,11 @@ LEVEL_MARKERS = [
     ("dim", "muted"),
 ]
 
-REQUIRED_BLOCK_KEYS = ["source_table", "target_table", "id_source", "id_target", "id_mode", "columns"]
+REQUIRED_BLOCK_KEYS = ["source_table", "target_table", "id_mode"]
+VALID_ID_MODES = ("preserve", "preserve_secondary", "none")
+FILTER_OPS_NO_VALUE = ("IS NULL", "IS NOT NULL")
+FILTER_OPS_LIST_VALUE = ("IN", "NOT IN")
+VALID_FILTER_OPS = FILTER_OPS_NO_VALUE + FILTER_OPS_LIST_VALUE + ("=", "!=", ">", ">=", "<", "<=", "LIKE", "NOT LIKE")
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +74,15 @@ class WebConsole:
                 break
         clean = RICH_TAG_RE.sub("", text).strip()
         if clean:
-            self.job["logs"].append({"level": level, "text": clean, "ts": time.time()})
+            # "detail" = baris minor (progres per-batch, dll) yang disembunyikan
+            # secara default di UI -- dipisah dari `level` supaya warna & filter
+            # detail bisa berubah independen satu sama lain.
+            self.job["logs"].append({
+                "level": level,
+                "text": clean,
+                "ts": time.time(),
+                "detail": level == "muted",
+            })
 
 
 # ---------------------------------------------------------------------------
@@ -83,15 +106,100 @@ def validate_mapping(mapping):
         for key in REQUIRED_BLOCK_KEYS:
             if not b.get(key):
                 raise ValueError(f"Blok #{i}: field '{key}' wajib diisi")
-        if b["id_mode"] not in ("preserve", "preserve_secondary"):
-            raise ValueError(f"Blok #{i}: id_mode harus 'preserve' atau 'preserve_secondary'")
-        if not isinstance(b["columns"], dict) or not b["columns"]:
-            raise ValueError(f"Blok #{i}: minimal harus ada 1 pasangan kolom")
+
+        id_mode = b["id_mode"]
+        if id_mode not in VALID_ID_MODES:
+            raise ValueError(f"Blok #{i}: id_mode harus salah satu dari {', '.join(VALID_ID_MODES)}")
+
+        if id_mode in ("preserve", "preserve_secondary"):
+            if not b.get("id_source") or not b.get("id_target"):
+                raise ValueError(f"Blok #{i}: id_source & id_target wajib diisi untuk id_mode '{id_mode}'")
+        elif b.get("id_source") or b.get("id_target"):
+            raise ValueError(f"Blok #{i}: id_source/id_target tidak boleh diisi kalau id_mode 'none' (tabel tanpa kolom kunci)")
+
+        columns = b.get("columns") or {}
+        unpivot = b.get("unpivot")
+        if not isinstance(columns, dict):
+            raise ValueError(f"Blok #{i}: 'columns' harus berupa object")
+        if not columns and not unpivot:
+            raise ValueError(f"Blok #{i}: minimal harus ada 1 pasangan kolom, atau isi blok unpivot")
+
+        # Nilai tiap pasangan kolom boleh string (1 kolom sumber -> 1 kolom tujuan)
+        # atau list (1 kolom sumber -> beberapa kolom tujuan sekaligus).
+        all_target_cols = []
+        for old_col, new_col in columns.items():
+            if isinstance(new_col, list):
+                if not new_col or not all(isinstance(t, str) and t for t in new_col):
+                    raise ValueError(
+                        f"Blok #{i}: pemetaan kolom `{old_col}` tidak valid "
+                        f"(daftar kolom tujuan kosong atau berisi nilai tidak valid)"
+                    )
+                all_target_cols.extend(new_col)
+            elif isinstance(new_col, str) and new_col:
+                all_target_cols.append(new_col)
+            else:
+                raise ValueError(f"Blok #{i}: pemetaan kolom `{old_col}` tidak valid")
+
+        if unpivot:
+            if not isinstance(unpivot, dict):
+                raise ValueError(f"Blok #{i}: 'unpivot' harus berupa object")
+            for key in ["target_label_column", "target_value_column", "items"]:
+                if not unpivot.get(key):
+                    raise ValueError(f"Blok #{i}: field unpivot '{key}' wajib diisi")
+            if unpivot["target_label_column"] == unpivot["target_value_column"]:
+                raise ValueError(f"Blok #{i}: kolom label & value unpivot tidak boleh sama")
+            if not isinstance(unpivot["items"], list) or not unpivot["items"]:
+                raise ValueError(f"Blok #{i}: unpivot.items harus list berisi minimal 1 item")
+            for j, item in enumerate(unpivot["items"], 1):
+                if not item.get("source_column") or not item.get("label"):
+                    raise ValueError(f"Blok #{i}: unpivot.items #{j} wajib punya 'source_column' dan 'label'")
+
         fk = b.get("fk")
         if fk:
             for key in ["source_column", "target_column", "ref_source_table", "ref_source_column"]:
                 if not fk.get(key):
                     raise ValueError(f"Blok #{i}: field FK '{key}' wajib diisi")
+
+        filter_def = b.get("filter")
+        if filter_def:
+            if not isinstance(filter_def, dict):
+                raise ValueError(f"Blok #{i}: 'filter' harus berupa object")
+            logic = filter_def.get("logic", "AND")
+            if logic not in ("AND", "OR"):
+                raise ValueError(f"Blok #{i}: filter.logic harus 'AND' atau 'OR'")
+            conditions = filter_def.get("conditions")
+            if not isinstance(conditions, list) or not conditions:
+                raise ValueError(f"Blok #{i}: filter.conditions harus list berisi minimal 1 kondisi")
+            for j, cond in enumerate(conditions, 1):
+                if not isinstance(cond, dict) or not cond.get("column") or not isinstance(cond["column"], str):
+                    raise ValueError(f"Blok #{i}: filter.conditions #{j} wajib punya 'column'")
+                op = cond.get("operator")
+                if op not in VALID_FILTER_OPS:
+                    raise ValueError(f"Blok #{i}: filter.conditions #{j} operator tidak dikenal: {op}")
+                if op not in FILTER_OPS_NO_VALUE:
+                    value = cond.get("value")
+                    if op in FILTER_OPS_LIST_VALUE:
+                        if not isinstance(value, list) or not value or not all(v not in (None, "") for v in value):
+                            raise ValueError(
+                                f"Blok #{i}: filter.conditions #{j} 'value' untuk operator {op} "
+                                f"harus list berisi minimal 1 nilai"
+                            )
+                    elif value in (None, ""):
+                        raise ValueError(f"Blok #{i}: filter.conditions #{j} wajib punya 'value' untuk operator {op}")
+
+        # Satu kolom tujuan cuma boleh diisi sekali per blok (id/fk/unpivot/columns
+        # tidak boleh tabrakan menulis ke kolom fisik yang sama).
+        reserved_target_cols = [c for c in [b.get("id_target"), fk.get("target_column") if fk else None] if c]
+        if unpivot:
+            reserved_target_cols += [unpivot.get("target_label_column"), unpivot.get("target_value_column")]
+        seen_target_cols = set()
+        for t in all_target_cols + reserved_target_cols:
+            if t in seen_target_cols:
+                raise ValueError(
+                    f"Blok #{i}: kolom tujuan `{t}` dipetakan lebih dari sekali "
+                    f"(cek pasangan kolom, id_target, fk, dan unpivot supaya tidak tabrakan)"
+                )
+            seen_target_cols.add(t)
 
 
 # ---------------------------------------------------------------------------
@@ -247,13 +355,25 @@ def delete_mapping(name):
 # Jalankan & pantau migrasi
 # ---------------------------------------------------------------------------
 
-def _run_job(job_id, tables):
+def _run_job(job_id, tables, force, continue_on_error, clear_existing):
     job = JOBS[job_id]
     console = WebConsole(job)
     try:
         migration_service.register_migration_queue(tables)
-        run_migration_process(tables, console=console)
-        job["status"] = "SUCCESS"
+        summary = run_migration_process(
+            tables,
+            console=console,
+            force=force,
+            continue_on_error=continue_on_error,
+            clear_existing=clear_existing,
+        )
+        job["summary"] = summary
+        if summary["failed_count"] == 0 and summary["skipped_count"] == 0:
+            job["status"] = "SUCCESS"
+        elif summary["success_count"] == 0:
+            job["status"] = "FAILED"
+        else:
+            job["status"] = "PARTIAL"
     except Exception as err:
         job["status"] = "FAILED"
         job["logs"].append({"level": "error", "text": f"Migrasi berhenti: {err}", "ts": time.time()})
@@ -265,6 +385,10 @@ def _run_job(job_id, tables):
 def api_run():
     data = request.get_json(force=True, silent=True) or {}
     tables = data.get("tables") or []
+    force_migration = bool(data.get("force"))
+    continue_on_error = data.get("continue_on_error")
+    continue_on_error = True if continue_on_error is None else bool(continue_on_error)
+    clear_existing = bool(data.get("clear_existing"))
     if not tables:
         return jsonify({"error": "Pilih minimal satu tabel"}), 400
 
@@ -272,15 +396,23 @@ def api_run():
     job = {
         "id": job_id,
         "tables": tables,
+        "force": force_migration,
+        "continue_on_error": continue_on_error,
+        "clear_existing": clear_existing,
         "status": "RUNNING",
         "logs": [],
+        "summary": None,
         "started_at": time.time(),
         "finished_at": None,
     }
     with JOBS_LOCK:
         JOBS[job_id] = job
 
-    threading.Thread(target=_run_job, args=(job_id, tables), daemon=True).start()
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, tables, force_migration, continue_on_error, clear_existing),
+        daemon=True,
+    ).start()
     return jsonify({"job_id": job_id})
 
 
@@ -292,7 +424,11 @@ def api_run_status(job_id):
     return jsonify({
         "id": job["id"],
         "tables": job["tables"],
+        "force": job.get("force", False),
+        "continue_on_error": job.get("continue_on_error", True),
+        "clear_existing": job.get("clear_existing", False),
         "status": job["status"],
+        "summary": job.get("summary"),
         "started_at": job["started_at"],
         "finished_at": job["finished_at"],
         "log_count": len(job["logs"]),
@@ -321,7 +457,7 @@ def api_run_stream(job_id):
                 yield f"data: {json.dumps(logs[idx])}\n\n"
                 idx += 1
             if job["status"] != "RUNNING":
-                yield f"event: done\ndata: {json.dumps({'status': job['status']})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'status': job['status'], 'summary': job.get('summary')})}\n\n"
                 break
             time.sleep(0.3)
 
@@ -335,7 +471,11 @@ def api_jobs():
             {
                 "id": j["id"],
                 "tables": j["tables"],
+                "force": j.get("force", False),
+                "continue_on_error": j.get("continue_on_error", True),
+                "clear_existing": j.get("clear_existing", False),
                 "status": j["status"],
+                "summary": j.get("summary"),
                 "started_at": j["started_at"],
                 "finished_at": j["finished_at"],
             }

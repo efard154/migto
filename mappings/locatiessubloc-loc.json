@@ -1,0 +1,68 @@
+{
+  "blocks": [
+    {
+      "source_table": "locaties",
+      "target_table": "locaties",
+      "id_source": "id",
+      "id_target": "loc_id",
+      "id_mode": "preserve",
+      "upsert": true,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "gebouwtype": "loc_building_type",
+        "gps_latitude": "loc_gps_latitude",
+        "gps_longitude": "loc_gps_longitude",
+        "last_update": "last_update",
+        "locatie_reg_date": "loc_registration_date",
+        "ontwikkelgebied": "loc_devl_area",
+        "status": "loc_status",
+        "user": "loc_user",
+        "vestigingsadres": "loc_address",
+        "vestigingsadres_hnr_toevoeging": "loc_address_nr_addon",
+        "vestigingsadres_huisnummer": "loc_address_nr",
+        "vestigingsadres_plaats": "loc_address_city",
+        "vestigingsadres_postcode": "loc_address_postcode",
+        "vestigingsnummer": "loc_vestigingsnummer"
+      },
+      "unpivot": null,
+      "filter": null
+    },
+    {
+      "source_table": "sub_locatie",
+      "target_table": "locaties",
+      "id_source": null,
+      "id_target": null,
+      "id_mode": "none",
+      "upsert": false,
+      "dedup_key": null,
+      "fk": null,
+      "columns": {
+        "bag_pand_id": "loc_subloc_bag_pand_id",
+        "gebouwcode": "loc_subloc_gebouwcode",
+        "gemeentecode": "loc_subloc_gemeentecode",
+        "gps_breedtegraad": "loc_gps_latitude",
+        "gps_lengtegraad": "loc_gps_longitude",
+        "huisnummer": "loc_address_nr",
+        "huisnummer_toevoeging": "loc_address_nr_addon",
+        "id": "sub_loc_id_old",
+        "klant_id": "loc_subloc_klant_id",
+        "last_update": "last_update",
+        "locaties_id": "sub_loc_id",
+        "perceelnummer": "loc_parcel_nr",
+        "plaats": "loc_address_city",
+        "postcode": "loc_address_postcode",
+        "ruimtenummer": "loc_subloc_ruimtenummer",
+        "sectienummer": "loc_section_nr",
+        "stookruimte": "loc_stookruimte",
+        "straatnaam": "loc_address",
+        "user": "loc_user",
+        "volgnummer": "loc_ordernr"
+      },
+      "unpivot": null,
+      "filter": null
+    }
+  ],
+  "description": "Comparation of OLD TABLE : locaties, sub_locatie  →  NEW TABLE : locaties",
+  "name": "locaties.subloc-loc"
+}
